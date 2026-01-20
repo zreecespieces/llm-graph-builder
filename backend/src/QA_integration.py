@@ -377,8 +377,37 @@ def initialize_neo4j_vector(graph, chat_mode_settings):
         raise
     return neo_db
 
-def create_retriever(neo_db, document_names, chat_mode_settings,search_k, score_threshold,ef_ratio):
-    if document_names and chat_mode_settings["document_filter"]:
+def create_retriever(neo_db, document_names, chat_mode_settings,search_k, score_threshold,ef_ratio, instructional_ids=None):
+    # Parse instructional_ids if provided
+    if instructional_ids:
+        try:
+            instructional_ids_list = list(map(str.strip, json.loads(instructional_ids)))
+            logging.info(f"Filtering by instructional IDs: {instructional_ids_list}")
+        except (json.JSONDecodeError, TypeError):
+            logging.warning(f"Failed to parse instructional_ids: {instructional_ids}, ignoring filter")
+            instructional_ids_list = None
+    else:
+        instructional_ids_list = None
+    
+    # Build filter based on instructional_ids or document_names
+    if instructional_ids_list:
+        # Create OR filter for fileName starting with any instructional ID
+        # Using regex pattern to match fileName that starts with any of the instructional IDs
+        filter_conditions = []
+        for inst_id in instructional_ids_list:
+            filter_conditions.append({'fileName': {'$regex': f'^{inst_id}'}})
+        
+        retriever = neo_db.as_retriever(
+            search_type="similarity_score_threshold",
+            search_kwargs={
+                'top_k': search_k,
+                'effective_search_ratio': ef_ratio,
+                'score_threshold': score_threshold,
+                'filter': {'$or': filter_conditions}
+            }
+        )
+        logging.info(f"Successfully created retriever with instructional ID filter for IDs: {instructional_ids_list}, search_k={search_k}, score_threshold={score_threshold}")
+    elif document_names and chat_mode_settings["document_filter"]:
         retriever = neo_db.as_retriever(
             search_type="similarity_score_threshold",
             search_kwargs={
@@ -397,14 +426,14 @@ def create_retriever(neo_db, document_names, chat_mode_settings,search_k, score_
         logging.info(f"Successfully created retriever with search_k={search_k}, score_threshold={score_threshold}")
     return retriever
 
-def get_neo4j_retriever(graph, document_names,chat_mode_settings, score_threshold=CHAT_SEARCH_KWARG_SCORE_THRESHOLD):
+def get_neo4j_retriever(graph, document_names,chat_mode_settings, score_threshold=CHAT_SEARCH_KWARG_SCORE_THRESHOLD, instructional_ids=None):
     try:
 
         neo_db = initialize_neo4j_vector(graph, chat_mode_settings)
         # document_names= list(map(str.strip, json.loads(document_names)))
         search_k = chat_mode_settings["top_k"]
         ef_ratio = get_value_from_env("EFFECTIVE_SEARCH_RATIO", 5, "int")
-        retriever = create_retriever(neo_db, document_names,chat_mode_settings, search_k, score_threshold,ef_ratio)
+        retriever = create_retriever(neo_db, document_names,chat_mode_settings, search_k, score_threshold,ef_ratio, instructional_ids)
         return retriever
     except Exception as e:
         index_name = chat_mode_settings.get("index_name")
@@ -412,7 +441,7 @@ def get_neo4j_retriever(graph, document_names,chat_mode_settings, score_threshol
         raise Exception(f"An error occurred while retrieving the Neo4jVector index or creating the retriever. Please drop and create a new vector index '{index_name}': {e}") from e 
 
 
-def setup_chat(model, graph, document_names, chat_mode_settings):
+def setup_chat(model, graph, document_names, chat_mode_settings, instructional_ids=None):
     start_time = time.time()
     try:
         if model == "diffbot":
@@ -421,7 +450,7 @@ def setup_chat(model, graph, document_names, chat_mode_settings):
         llm, model_name, _ = get_llm(model=model)
         logging.info(f"Model called in chat: {model} (version: {model_name})")
 
-        retriever = get_neo4j_retriever(graph=graph, chat_mode_settings=chat_mode_settings, document_names=document_names)
+        retriever = get_neo4j_retriever(graph=graph, chat_mode_settings=chat_mode_settings, document_names=document_names, instructional_ids=instructional_ids)
         doc_retriever = create_document_retriever_chain(llm, retriever)
         
         chat_setup_time = time.time() - start_time
@@ -433,7 +462,7 @@ def setup_chat(model, graph, document_names, chat_mode_settings):
     
     return llm, doc_retriever, model_name
 
-def process_chat_response(messages, history, question, model, graph, document_names, chat_mode_settings, email=None, uri=None):
+def process_chat_response(messages, history, question, model, graph, document_names, chat_mode_settings, email=None, uri=None, instructional_ids=None):
     try:
         if get_value_from_env("TRACK_TOKEN_USAGE", "false", "bool"):
             try:
@@ -441,7 +470,7 @@ def process_chat_response(messages, history, question, model, graph, document_na
             except LLMGraphBuilderException as e:
                 logging.error(str(e))
                 raise RuntimeError(str(e))
-        llm, doc_retriever, model_version = setup_chat(model, graph, document_names, chat_mode_settings)
+        llm, doc_retriever, model_version = setup_chat(model, graph, document_names, chat_mode_settings, instructional_ids)
         
         docs,transformed_question = retrieve_documents(doc_retriever, messages)  
 
@@ -664,7 +693,7 @@ def get_chat_mode_settings(mode,settings_map=CHAT_MODE_CONFIG_MAP):
 
     return chat_mode_settings
     
-def QA_RAG(graph, model, question, document_names, session_id, mode, write_access=True, email=None, uri=None):
+def QA_RAG(graph, model, question, document_names, session_id, mode, write_access=True, email=None, uri=None, instructional_ids=None):
     logging.info(f"Chat Mode: {mode}")
 
     history = create_neo4j_chat_message_history(graph, session_id, write_access)
@@ -695,7 +724,7 @@ def QA_RAG(graph, model, question, document_names, session_id, mode, write_acces
                 "user": "chatbot"
             }
         else:
-            result = process_chat_response(messages,history, question, model, graph, document_names,chat_mode_settings, email, uri)
+            result = process_chat_response(messages,history, question, model, graph, document_names,chat_mode_settings, email, uri, instructional_ids)
 
     result["session_id"] = session_id
     

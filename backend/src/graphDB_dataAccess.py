@@ -487,6 +487,15 @@ class graphDBdataAccess:
         return "Drop and Re-Create vector index succesfully"
 
 
+    def _safe_int(self, value, default=0):
+        """Safely convert a value to int, returning default for None or empty strings."""
+        if value is None or value == "":
+            return default
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return default
+
     def update_node_relationship_count(self,document_name):
         logging.info("updating node and relationship count")
         label_query = """CALL db.labels"""
@@ -502,18 +511,18 @@ class graphDBdataAccess:
         if result:
             for record in result:
                 filename = record.get("filename",None)
-                chunkNodeCount = int(record.get("chunkNodeCount",0))
-                chunkRelCount = int(record.get("chunkRelCount",0))
-                entityNodeCount = int(record.get("entityNodeCount",0))
-                entityEntityRelCount = int(record.get("entityEntityRelCount",0))
+                chunkNodeCount = self._safe_int(record.get("chunkNodeCount"))
+                chunkRelCount = self._safe_int(record.get("chunkRelCount"))
+                entityNodeCount = self._safe_int(record.get("entityNodeCount"))
+                entityEntityRelCount = self._safe_int(record.get("entityEntityRelCount"))
                 if (not document_name) and (community_flag):
-                    communityNodeCount = int(record.get("communityNodeCount",0))
-                    communityRelCount = int(record.get("communityRelCount",0))
+                    communityNodeCount = self._safe_int(record.get("communityNodeCount"))
+                    communityRelCount = self._safe_int(record.get("communityRelCount"))
                 else:
                     communityNodeCount = 0
                     communityRelCount = 0
-                nodeCount = int(chunkNodeCount) + int(entityNodeCount) + int(communityNodeCount)
-                relationshipCount = int(chunkRelCount) + int(entityEntityRelCount) + int(communityRelCount)
+                nodeCount = chunkNodeCount + entityNodeCount + communityNodeCount
+                relationshipCount = chunkRelCount + entityEntityRelCount + communityRelCount
                 update_query = """
                 MATCH (d:Document {fileName: $filename})
                 SET d.chunkNodeCount = $chunkNodeCount,

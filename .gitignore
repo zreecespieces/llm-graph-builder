@@ -1,3 +1,5 @@
+.sa-key.json
+
 .DS_Store
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -122,6 +124,7 @@ celerybeat.pid
 
 # Environments
 .env
+env.yaml
 .venv
 env/
 venv/

@@ -21,6 +21,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from src.QA_integration import QA_RAG, clear_chat_history
+from langchain_neo4j import Neo4jChatMessageHistory
 from src.api_response import create_api_response
 from src.chunkid_entities import get_entities_from_chunkids
 from src.communities import create_communities
@@ -388,7 +389,8 @@ async def chat_bot(
     question=Form(None),
     document_names=Form(None),
     session_id=Form(None),
-    mode=Form(None)
+    mode=Form(None),
+    instructionalIds=Form(None)
 ):
     """Run QA chat bot on the graph database."""
     logging.info(f"QA_RAG called at {datetime.now()}")
@@ -401,7 +403,7 @@ async def chat_bot(
         
         graphDb_data_Access = graphDBdataAccess(graph)
         write_access = graphDb_data_Access.check_account_access(database=credentials.database)
-        result = await asyncio.to_thread(QA_RAG, graph=graph, model=model, question=question, document_names=document_names, session_id=session_id, mode=mode, write_access=write_access, email=credentials.email, uri=credentials.uri)
+        result = await asyncio.to_thread(QA_RAG, graph=graph, model=model, question=question, document_names=document_names, session_id=session_id, mode=mode, write_access=write_access, email=credentials.email, uri=credentials.uri, instructional_ids=instructionalIds)
 
         total_call_time = time.time() - qa_rag_start_time
         logging.info(f"Total Response time is  {total_call_time:.2f} seconds")
@@ -497,6 +499,61 @@ async def graph_query(
     finally:
         gc.collect()
     
+
+@app.post("/get_chat_history")
+async def get_chat_history(
+    credentials: Neo4jCredentials = Depends(get_neo4j_credentials),
+    session_id=Form(None)
+):
+    """Retrieve chat message history for a given session ID."""
+    try:
+        start = time.time()
+        graph = create_graph_database_connection(credentials)
+        
+        history = Neo4jChatMessageHistory(
+            graph=graph,
+            session_id=session_id
+        )
+        
+        messages = []
+        for msg in history.messages:
+            messages.append({
+                "type": "human" if msg.type == "human" else "ai",
+                "content": msg.content,
+            })
+        
+        end = time.time()
+        elapsed_time = end - start
+        
+        json_obj = {
+            'api_name': 'get_chat_history',
+            'db_url': credentials.uri,
+            'userName': credentials.userName,
+            'database': credentials.database,
+            'session_id': session_id,
+            'logging_time': formatted_time(datetime.now(timezone.utc)),
+            'elapsed_api_time': f'{elapsed_time:.2f}',
+            'email': credentials.email
+        }
+        logger.log_struct(json_obj, "INFO")
+        
+        return create_api_response(
+            'Success',
+            data={
+                "session_id": session_id,
+                "messages": messages
+            },
+            message=f"Retrieved {len(messages)} messages"
+        )
+        
+    except Exception as e:
+        job_status = "Failed"
+        message = "Unable to retrieve chat history"
+        error_message = str(e)
+        logging.exception(f'Exception in get_chat_history: {error_message}')
+        return create_api_response(job_status, message=message, error=error_message)
+    finally:
+        gc.collect()
 
 @app.post("/clear_chat_bot")
 async def clear_chat_bot(
