@@ -4,6 +4,7 @@ import time
 import logging
 
 import threading
+import math
 from datetime import datetime
 from typing import Any
 from dotenv import load_dotenv
@@ -487,11 +488,6 @@ def process_chat_response(messages, history, question, model, graph, document_na
         
         ai_response = AIMessage(content=content)
         messages.append(ai_response)
-
-        summarization_thread = threading.Thread(target=summarize_and_log, args=(history, messages, llm))
-        summarization_thread.start()
-        logging.info("Summarization thread started.")
-        # summarize_and_log(history, messages, llm)
         metric_details = {"question":question,"contexts":formatted_docs,"answer":content}
         return {
             "session_id": "",  
@@ -622,10 +618,6 @@ def process_graph_response(model, graph, question, messages, history):
         ai_response = AIMessage(content=ai_response_content)
         
         messages.append(ai_response)
-        # summarize_and_log(history, messages, qa_llm)
-        summarization_thread = threading.Thread(target=summarize_and_log, args=(history, messages, qa_llm))
-        summarization_thread.start()
-        logging.info("Summarization thread started.")
         metric_details = {"question":question,"contexts":graph_response.get("context", ""),"answer":ai_response_content}
         result = {
             "session_id": "", 
@@ -679,6 +671,52 @@ def create_neo4j_chat_message_history(graph, session_id, write_access=True):
         logging.error(f"Error creating Neo4jChatMessageHistory: {e}")
         raise 
 
+def _cosine_similarity(vec_a, vec_b):
+    if not vec_a or not vec_b:
+        return 0.0
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    norm_a = math.sqrt(sum(a * a for a in vec_a))
+    norm_b = math.sqrt(sum(b * b for b in vec_b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+def select_chat_context_messages(history_messages, question, similar_count=6, recent_count=4):
+    if not history_messages:
+        return []
+
+    recent_messages = history_messages[-recent_count:] if recent_count > 0 else []
+    remaining_messages = history_messages[:-recent_count] if recent_count > 0 else history_messages
+
+    if not remaining_messages or similar_count <= 0:
+        return recent_messages
+
+    embedding_fn, _ = load_embedding_model(EMBEDDING_MODEL)
+    question_embedding = embedding_fn.embed_query(question)
+    message_texts = [msg.content for msg in remaining_messages]
+    message_embeddings = embedding_fn.embed_documents(message_texts)
+
+    scored_messages = []
+    for msg, embedding in zip(remaining_messages, message_embeddings):
+        score = _cosine_similarity(question_embedding, embedding)
+        scored_messages.append((score, msg))
+
+    scored_messages.sort(key=lambda item: item[0], reverse=True)
+    similar_messages = [msg for _, msg in scored_messages[:similar_count]]
+
+    selected = []
+    selected_ids = set()
+    for msg in similar_messages + recent_messages:
+        msg_id = id(msg)
+        if msg_id in selected_ids:
+            continue
+        selected_ids.add(msg_id)
+        selected.append(msg)
+
+    history_set = set(selected_ids)
+    ordered = [msg for msg in history_messages if id(msg) in history_set]
+    return ordered
+
 def get_chat_mode_settings(mode,settings_map=CHAT_MODE_CONFIG_MAP):
     default_settings = settings_map[CHAT_DEFAULT_MODE]
     try:
@@ -698,12 +736,14 @@ def QA_RAG(graph, model, question, document_names, session_id, mode, write_acces
 
     history = create_neo4j_chat_message_history(graph, session_id, write_access)
     messages = history.messages
+    context_messages = select_chat_context_messages(messages, question, similar_count=6, recent_count=4)
 
     user_question = HumanMessage(content=question)
     messages.append(user_question)
+    context_messages.append(user_question)
 
     if mode == CHAT_GRAPH_MODE:
-        result = process_graph_response(model, graph, question, messages, history)
+        result = process_graph_response(model, graph, question, context_messages, history)
     else:
         chat_mode_settings = get_chat_mode_settings(mode=mode)
         document_names= list(map(str.strip, json.loads(document_names)))
@@ -724,7 +764,7 @@ def QA_RAG(graph, model, question, document_names, session_id, mode, write_acces
                 "user": "chatbot"
             }
         else:
-            result = process_chat_response(messages,history, question, model, graph, document_names,chat_mode_settings, email, uri, instructional_ids)
+            result = process_chat_response(context_messages,history, question, model, graph, document_names,chat_mode_settings, email, uri, instructional_ids)
 
     result["session_id"] = session_id
     
