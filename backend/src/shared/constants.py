@@ -321,6 +321,7 @@ RETURN text,
                              ELSE d.url 
                        END, 
                        d.fileName), 
+        fileName: d.fileName,
         chunkdetails: chunkdetails} AS metadata
 """ 
 
@@ -489,6 +490,7 @@ RETURN
    {
        length: size(text),
        source: COALESCE(CASE WHEN d.url CONTAINS "None" THEN d.fileName ELSE d.url END, d.fileName),
+       fileName: d.fileName,
        chunkdetails: chunkdetails,
        entities : {
            entityids: entityIds,

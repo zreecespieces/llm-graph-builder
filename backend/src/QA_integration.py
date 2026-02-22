@@ -271,7 +271,35 @@ def process_documents(docs, question, messages, llm, model,chat_mode_settings):
     
     return content, result, total_tokens, formatted_docs
 
-def retrieve_documents(doc_retriever, messages):
+def filter_documents_by_criteria(docs, instructional_ids_list=None, document_names=None):
+    """Filter documents based on instructional IDs or document names."""
+    if not docs:
+        return docs
+    
+    filtered_docs = []
+    for doc in docs:
+        file_name = doc.metadata.get('fileName', '')
+        
+        # Check instructional ID filter (fileName starts with any instructional ID)
+        if instructional_ids_list:
+            if any(file_name.startswith(inst_id) for inst_id in instructional_ids_list):
+                filtered_docs.append(doc)
+        # Check document names filter (exact match)
+        elif document_names:
+            if file_name in document_names:
+                filtered_docs.append(doc)
+        else:
+            # No filter, keep all docs
+            filtered_docs.append(doc)
+    
+    if instructional_ids_list:
+        logging.info(f"Post-retrieval filtering: {len(docs)} docs -> {len(filtered_docs)} docs matching instructional IDs {instructional_ids_list}")
+    elif document_names:
+        logging.info(f"Post-retrieval filtering: {len(docs)} docs -> {len(filtered_docs)} docs matching document names")
+    
+    return filtered_docs
+
+def retrieve_documents(doc_retriever, messages, instructional_ids_list=None, document_names=None, apply_post_filter=False):
 
     start_time = time.time()
     try:
@@ -280,6 +308,11 @@ def retrieve_documents(doc_retriever, messages):
         transformed_question = handler.transformed_question
         if transformed_question:
             logging.info(f"Transformed question : {transformed_question}")
+        
+        # Apply post-retrieval filtering if needed (for hybrid search)
+        if apply_post_filter and docs:
+            docs = filter_documents_by_criteria(docs, instructional_ids_list, document_names)
+        
         doc_retrieval_time = time.time() - start_time
         logging.info(f"Documents retrieved in {doc_retrieval_time:.2f} seconds")
         
@@ -390,8 +423,12 @@ def create_retriever(neo_db, document_names, chat_mode_settings,search_k, score_
     else:
         instructional_ids_list = None
     
+    # Check if hybrid search is being used (filters not supported with hybrid search)
+    is_hybrid_search = bool(chat_mode_settings.get("keyword_index"))
+    
     # Build filter based on instructional_ids or document_names
-    if instructional_ids_list:
+    # Note: Filters are not supported with hybrid search, so we skip them in that case
+    if instructional_ids_list and not is_hybrid_search:
         # Create OR filter for fileName starting with any instructional ID
         # Using regex pattern to match fileName that starts with any of the instructional IDs
         filter_conditions = []
@@ -408,7 +445,7 @@ def create_retriever(neo_db, document_names, chat_mode_settings,search_k, score_
             }
         )
         logging.info(f"Successfully created retriever with instructional ID filter for IDs: {instructional_ids_list}, search_k={search_k}, score_threshold={score_threshold}")
-    elif document_names and chat_mode_settings["document_filter"]:
+    elif document_names and chat_mode_settings["document_filter"] and not is_hybrid_search:
         retriever = neo_db.as_retriever(
             search_type="similarity_score_threshold",
             search_kwargs={
@@ -420,11 +457,15 @@ def create_retriever(neo_db, document_names, chat_mode_settings,search_k, score_
         )
         logging.info(f"Successfully created retriever with search_k={search_k}, score_threshold={score_threshold} for documents {document_names}")
     else:
+        # For hybrid search or when no filters are needed
         retriever = neo_db.as_retriever(
             search_type="similarity_score_threshold",
             search_kwargs={'top_k': search_k,'effective_search_ratio': ef_ratio, 'score_threshold': score_threshold}
         )
-        logging.info(f"Successfully created retriever with search_k={search_k}, score_threshold={score_threshold}")
+        if is_hybrid_search and (instructional_ids_list or document_names):
+            logging.info(f"Hybrid search mode detected - filters will be applied post-retrieval. search_k={search_k}, score_threshold={score_threshold}")
+        else:
+            logging.info(f"Successfully created retriever with search_k={search_k}, score_threshold={score_threshold}")
     return retriever
 
 def get_neo4j_retriever(graph, document_names,chat_mode_settings, score_threshold=CHAT_SEARCH_KWARG_SCORE_THRESHOLD, instructional_ids=None):
@@ -473,7 +514,19 @@ def process_chat_response(messages, history, question, model, graph, document_na
                 raise RuntimeError(str(e))
         llm, doc_retriever, model_version = setup_chat(model, graph, document_names, chat_mode_settings, instructional_ids)
         
-        docs,transformed_question = retrieve_documents(doc_retriever, messages)  
+        # Parse instructional_ids for post-filtering if needed
+        instructional_ids_list = None
+        if instructional_ids:
+            try:
+                instructional_ids_list = list(map(str.strip, json.loads(instructional_ids)))
+            except (json.JSONDecodeError, TypeError):
+                logging.warning(f"Failed to parse instructional_ids in process_chat_response: {instructional_ids}")
+        
+        # Determine if post-filtering is needed (for hybrid search mode)
+        is_hybrid_search = bool(chat_mode_settings.get("keyword_index"))
+        apply_post_filter = is_hybrid_search and (instructional_ids_list or document_names)
+        
+        docs,transformed_question = retrieve_documents(doc_retriever, messages, instructional_ids_list, document_names, apply_post_filter)  
 
         if docs:
             content, result, total_tokens,formatted_docs = process_documents(docs, question, messages, llm, model, chat_mode_settings)
@@ -487,7 +540,7 @@ def process_chat_response(messages, history, question, model, graph, document_na
             formatted_docs = ""
         
         ai_response = AIMessage(content=content)
-        messages.append(ai_response)
+        history.add_message(ai_response)
         metric_details = {"question":question,"contexts":formatted_docs,"answer":content}
         return {
             "session_id": "",  
@@ -617,7 +670,7 @@ def process_graph_response(model, graph, question, messages, history):
         ai_response_content = graph_response.get("response", "Something went wrong")
         ai_response = AIMessage(content=ai_response_content)
         
-        messages.append(ai_response)
+        history.add_message(ai_response)
         metric_details = {"question":question,"contexts":graph_response.get("context", ""),"answer":ai_response_content}
         result = {
             "session_id": "", 
@@ -739,14 +792,17 @@ def QA_RAG(graph, model, question, document_names, session_id, mode, write_acces
     context_messages = select_chat_context_messages(messages, question, similar_count=6, recent_count=4)
 
     user_question = HumanMessage(content=question)
-    messages.append(user_question)
+    history.add_message(user_question)
     context_messages.append(user_question)
 
     if mode == CHAT_GRAPH_MODE:
         result = process_graph_response(model, graph, question, context_messages, history)
     else:
         chat_mode_settings = get_chat_mode_settings(mode=mode)
-        document_names= list(map(str.strip, json.loads(document_names)))
+        if document_names:
+            document_names = list(map(str.strip, json.loads(document_names)))
+        else:
+            document_names = []
         if document_names and not chat_mode_settings["document_filter"]:
             result =  {
                 "session_id": "",  
