@@ -394,11 +394,25 @@ class graphDBdataAccess:
         param = {"elementIds":entities_list}
         return self.execute_query(query,param)
     
-    def get_duplicate_nodes_list(self):
+    def get_duplicate_nodes_list(self, exclude_labels=None, include_labels=None):
+        if exclude_labels and include_labels:
+            raise ValueError("Cannot specify both exclude_labels and include_labels")
+        
         score_value = get_value_from_env("DUPLICATE_SCORE_VALUE",0.97,"float")
         text_distance = get_value_from_env("DUPLICATE_TEXT_DISTANCE", 3 ,"int")
-        query_duplicate_nodes = """
-                MATCH (n:!Chunk&!Session&!Document&!`__Community__`) with n 
+        
+        base_exclusions = ['Chunk', 'Session', 'Document', '__Community__']
+        
+        if include_labels:
+            label_filter = " OR ".join(f"n:`{label}`" for label in include_labels)
+            match_clause = f"MATCH (n) WHERE ({label_filter})"
+        else:
+            all_exclusions = base_exclusions + (exclude_labels if exclude_labels else [])
+            label_expr = "&".join(f"!`{label}`" for label in all_exclusions)
+            match_clause = f"MATCH (n:{label_expr})"
+        
+        query_duplicate_nodes = f"""
+                {match_clause} with n 
                 WHERE n.embedding is not null and n.id is not null // and size(toString(n.id)) > 3
                 WITH n ORDER BY count {{ (n)--() }} DESC, size(toString(n.id)) DESC // updated
                 WITH collect(n) as nodes

@@ -1,4 +1,5 @@
 # Project Overview
+
 Welcome to our project! This project is built using FastAPI framework to create a fast and modern API with Python.
 
 ## Prerequisites
@@ -7,11 +8,12 @@ Welcome to our project! This project is built using FastAPI framework to create 
 - pip (Python package manager)
 
 ## Feature
+
 API Endpoint : This project provides various API endpoint to perform specific tasks.
 Data Validation : Utilize FastAPI data validation and serialization feature.
 Interactive Documentation : Access Swagger UI and ReDoc for interactive API documentation.
 
-## Getting Started 
+## Getting Started
 
 Follow these steps to set up and run the project locally:
 
@@ -24,38 +26,46 @@ Follow these steps to set up and run the project locally:
 2. Create a virtual environment (recommended):
 
 > python3.12 -m venv venv
-> source venv/bin/activate  # On Windows: venv\Scripts\activate
+> source venv/bin/activate # On Windows: venv\Scripts\activate
 
 3. Install Dependency :
 
 > pip install -r requirements.txt -c constraints.txt
 
 ## Run backend project using unicorn
+
 Run the server:
+
 > uvicorn score:app --reload
 
 ## Run project using docker
-## prerequisite 
+
+## prerequisite
+
 Before proceeding, ensure the following software is installed on your machine
 
 Docker: https://www.docker.com/
 
 1. Build the docker image
+
    > docker build -t your_image_name .
-   
+
    Replace `your_image_name` with the meaningful name for your Docker image
 
 2. Run the Docker Container
+
    > docker run -it -p 8000:8000 your_image_name
-   
+
    Replace `8000` with the desired port.
 
 ## Access the API Documentation
+
 Open your browser and navigate to
 http://127.0.0.1:8000/docs for Swagger UI or
 http://127.0.0.1:8000/redocs for ReDoc.
 
 ## Project Structure
+
 `score.py`: Score entry point for FastAPI application
 
 ## Configuration
@@ -72,6 +82,18 @@ Update the environment variable in `.env` file. Refer example.env in backend fol
 
 `NEO4J_PASSWORD` : Neo4j database user password
 
-
 ## Contact
+
 For questions or support, feel free to contact us at christopher.crosbie@neo4j.com or michael.hunger@neo4j.com
+
+## Deploy
+
+gcloud run deploy dev-backend
+--source backend
+--region us-central1
+--env-vars-file backend/env.local.yaml
+
+gcloud run deploy prod-backend
+--source backend
+--region us-central1
+--env-vars-file backend/env.prod.yaml

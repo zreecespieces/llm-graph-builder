@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 import uvicorn
 from dotenv import load_dotenv
@@ -895,13 +895,28 @@ async def delete_orphan_nodes(
         gc.collect()
         
 @app.post("/get_duplicate_nodes")
-async def get_duplicate_nodes(credentials: Neo4jCredentials = Depends(get_neo4j_credentials)):
-    """Get the list of duplicate nodes in the graph database."""
+async def get_duplicate_nodes(
+    credentials: Neo4jCredentials = Depends(get_neo4j_credentials),
+    exclude_labels: Optional[str] = Form(None),
+    include_labels: Optional[str] = Form(None)
+):
+    """Get the list of duplicate nodes in the graph database.
+    
+    Args:
+        exclude_labels: JSON array of label names to exclude from deduplication.
+        include_labels: JSON array of label names to restrict deduplication to.
+        Cannot specify both exclude_labels and include_labels.
+    """
     try:
         start = time.time()
+        parsed_exclude = json.loads(exclude_labels) if exclude_labels else None
+        parsed_include = json.loads(include_labels) if include_labels else None
         graph = create_graph_database_connection(credentials)
         graphDb_data_Access = graphDBdataAccess(graph)
-        nodes_list, total_nodes = graphDb_data_Access.get_duplicate_nodes_list()
+        nodes_list, total_nodes = graphDb_data_Access.get_duplicate_nodes_list(
+            exclude_labels=parsed_exclude,
+            include_labels=parsed_include
+        )
         end = time.time()
         elapsed_time = end - start
         json_obj = {'api_name':'get_duplicate_nodes','db_url':credentials.uri,'userName':credentials.userName, 'database':credentials.database, 'logging_time': formatted_time(datetime.now(timezone.utc)), 'elapsed_api_time':f'{elapsed_time:.2f}','email':credentials.email}
