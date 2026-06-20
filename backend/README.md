@@ -88,12 +88,66 @@ For questions or support, feel free to contact us at christopher.crosbie@neo4j.c
 
 ## Deploy
 
-gcloud run deploy dev-backend
---source backend
---region us-central1
---env-vars-file backend/env.local.yaml
+Do not deploy with `env.local.yaml`, `env.prod.yaml`, or a packaged `.env` file. Those files can contain stale credentials and can override Cloud Run runtime environment values. The backend uses `backend/.gcloudignore` to exclude local env files from source deploys.
 
-gcloud run deploy prod-backend
---source backend
---region us-central1
---env-vars-file backend/env.prod.yaml
+Deploy dev:
+
+```bash
+gcloud run deploy dev-backend \
+  --project jiu-jitsu-platform \
+  --source backend \
+  --region us-central1 \
+  --service-account 984577491495-compute@developer.gserviceaccount.com \
+  --ingress all \
+  --no-allow-unauthenticated \
+  --network default \
+  --subnet default \
+  --network-tags grapple-graph-backend \
+  --vpc-egress private-ranges-only \
+  --command gunicorn \
+  --args score:app,--workers,2,--threads,4,--worker-class,uvicorn.workers.UvicornWorker,--bind,0.0.0.0:8080,--timeout,900 \
+  --cpu 1 \
+  --memory 2Gi \
+  --max-instances 20 \
+  --timeout 900 \
+  --no-automatic-updates \
+  --update-env-vars NEO4J_URI=bolt://10.128.0.2:7687,NEO4J_USERNAME=neo4j,NEO4J_DATABASE=neo4j \
+  --update-secrets NEO4J_PASSWORD=grapple-neo4j-password:latest
+```
+
+Deploy prod by changing the service name:
+
+```bash
+gcloud run deploy prod-backend \
+  --project jiu-jitsu-platform \
+  --source backend \
+  --region us-central1 \
+  --service-account 984577491495-compute@developer.gserviceaccount.com \
+  --ingress all \
+  --no-allow-unauthenticated \
+  --network default \
+  --subnet default \
+  --network-tags grapple-graph-backend \
+  --vpc-egress private-ranges-only \
+  --command gunicorn \
+  --args score:app,--workers,2,--threads,4,--worker-class,uvicorn.workers.UvicornWorker,--bind,0.0.0.0:8080,--timeout,900 \
+  --cpu 1 \
+  --memory 2Gi \
+  --max-instances 20 \
+  --timeout 900 \
+  --no-automatic-updates \
+  --update-env-vars NEO4J_URI=bolt://10.128.0.2:7687,NEO4J_USERNAME=neo4j,NEO4J_DATABASE=neo4j \
+  --update-secrets NEO4J_PASSWORD=grapple-neo4j-password:latest
+```
+
+Smoke test each service after deploy:
+
+```bash
+URL="https://dev-backend-984577491495.us-central1.run.app"
+TOKEN="$(gcloud auth print-identity-token)"
+curl -H "Authorization: Bearer $TOKEN" "$URL/health"
+curl -X POST "$URL/grapple/graph/lessons" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"instructionalId":"probe"}'
+```

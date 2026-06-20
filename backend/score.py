@@ -29,6 +29,7 @@ from src.entities.source_extract_params import SourceScanExtractParams, get_sour
 from src.entities.user_credential import Neo4jCredentials, get_neo4j_credentials
 from src.graphDB_dataAccess import graphDBdataAccess
 from src.graph_query import get_chunktext_results, get_graph_results, visualize_schema
+from src.grapple_graph_api import router as grapple_graph_router
 from src.logger import CustomLogger
 from src.main import (
     connection_check_and_get_vector_dimensions, create_source_node_graph_url_gcs, create_source_node_graph_url_s3,
@@ -47,7 +48,7 @@ from src.shared.llm_graph_builder_exception import LLMGraphBuilderException
 from Secweb.XContentTypeOptions import XContentTypeOptions
 from Secweb.XFrameOptions import XFrame
 
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 logger = CustomLogger()
 CHUNK_DIR = os.path.join(os.path.dirname(__file__), "chunks")
@@ -120,7 +121,7 @@ app.add_middleware(
     paths=[
         "/sources_list", "/url/scan", "/extract", "/chat_bot", "/chunk_entities", "/get_neighbours", "/graph_query",
         "/schema", "/populate_graph_schema", "/get_unconnected_nodes_list", "/get_duplicate_nodes", "/fetch_chunktext",
-        "/schema_visualization"
+        "/schema_visualization", "/grapple/graph"
     ]
 )
 app.add_middleware(
@@ -131,6 +132,7 @@ app.add_middleware(
 )
 app.add_middleware(SessionMiddleware, secret_key=os.urandom(24))
 app.add_api_route("/health", health([healthy_condition, healthy]))
+app.include_router(grapple_graph_router)
 
 
 @app.post("/url/scan")
@@ -1217,4 +1219,3 @@ async def get_token_limits(credentials: Neo4jCredentials = Depends(get_neo4j_cre
         
 if __name__ == "__main__":
     uvicorn.run(app)
-

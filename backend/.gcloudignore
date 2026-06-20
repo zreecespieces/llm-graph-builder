@@ -1,0 +1,6 @@
+.env
+.env.*
+env.local.yaml
+env.prod.yaml
+__pycache__/
+*.pyc
